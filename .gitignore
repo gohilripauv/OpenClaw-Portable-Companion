@@ -1,0 +1,17 @@
+# Generated bundles and caches
+dist/
+.cache/
+
+# Runtime-only directories (present in release ZIPs, never in source)
+app/
+runtime/
+gateway/node_modules/
+data/
+
+# Local editor and OS files
+.vs/
+.vscode/
+Thumbs.db
+Desktop.ini
+*.user
+*.suo

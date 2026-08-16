@@ -1,0 +1,105 @@
+name: Build release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag; must match versions.json
+        required: true
+        default: v0.1.0
+
+permissions:
+  contents: write
+
+concurrency:
+  group: portable-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.validate.outputs.tag }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate tag
+        id: validate
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          expected="v$(node -p "require('./versions.json').wrapperVersion")"
+          test "$RELEASE_TAG" = "$expected"
+          printf 'tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" \
+            --draft \
+            --title "OpenClaw Portable Companion $RELEASE_TAG" \
+            --notes-file docs/RELEASE_NOTES.md \
+            --target "$GITHUB_SHA"
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: windows-2025
+          - architecture: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Run portable checks
+        shell: powershell
+        run: .\scripts\Test-Portable.ps1
+
+      - name: Build verified bundle
+        shell: powershell
+        run: .\scripts\Build-Portable.ps1 -Architecture '${{ matrix.architecture }}'
+
+      - name: Test completed release ZIP
+        shell: powershell
+        run: |
+          $zip = (Get-ChildItem -LiteralPath .\dist -Filter '*.zip').FullName
+          $checksum = (Get-ChildItem -LiteralPath .\dist -Filter 'SHA256SUMS-*.txt').FullName
+          .\scripts\Test-ReleaseZip.ps1 -ZipPath $zip -ChecksumPath $checksum
+
+      - name: Upload to draft release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          gh release upload $env:RELEASE_TAG `
+            (Get-ChildItem -LiteralPath .\dist -Filter '*.zip').FullName `
+            (Get-ChildItem -LiteralPath .\dist -Filter 'SHA256SUMS-*.txt').FullName `
+            (Get-ChildItem -LiteralPath .\dist -Filter 'SBOM-*.cdx.json').FullName `
+            --clobber
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish completed release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release edit "$RELEASE_TAG" --draft=false

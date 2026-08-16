@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-2025
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run portable checks
+        shell: powershell
+        run: .\scripts\Test-Portable.ps1
+
+      - name: Audit locked production dependencies
+        working-directory: gateway
+        shell: powershell
+        run: npm audit --package-lock-only --omit=dev --audit-level=moderate
