@@ -135,6 +135,21 @@ function Set-RestrictedAcl {
     }
 }
 
+function Reset-PortableDataAcls {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+    # Reset every existing descendant to inherited permissions without following
+    # reparse targets. This removes explicit ACEs preserved by an ACL-aware copy.
+    # The root is restricted immediately afterwards, and Windows propagates that
+    # protected allow-list to the reset descendants.
+    $resetOutput = & $icacls $Path /reset /T /C /Q /L 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not normalize existing portable data ACLs: $($resetOutput -join [Environment]::NewLine)"
+    }
+    Set-RestrictedAcl -Path $Path
+}
+
 function Initialize-PortableDirectories {
     param(
         [Parameter(Mandatory = $true)]$Paths,
@@ -146,7 +161,7 @@ function Initialize-PortableDirectories {
     }
 
     if ($FileSystem -in @('NTFS', 'ReFS')) {
-        Set-RestrictedAcl -Path $Paths.Data
+        Reset-PortableDataAcls -Path $Paths.Data
     }
 
     foreach ($directory in @(
@@ -184,24 +199,96 @@ function Test-BundleManifest {
     param([Parameter(Mandatory = $true)]$Paths)
 
     if (-not (Test-Path -LiteralPath $Paths.BundleManifest -PathType Leaf)) {
-        Write-Warning 'bundle-manifest.json is missing; key-file integrity could not be checked.'
-        return
+        throw 'bundle-manifest.json is missing. Re-download and re-extract the release ZIP.'
     }
 
-    $manifest = Get-Content -LiteralPath $Paths.BundleManifest -Raw | ConvertFrom-Json
-    foreach ($entry in @($manifest.files)) {
-        $candidate = [System.IO.Path]::GetFullPath((Join-Path $Paths.Root ([string]$entry.path)))
-        $rootPrefix = $Paths.Root.TrimEnd('\') + '\'
+    try {
+        $manifest = Get-Content -LiteralPath $Paths.BundleManifest -Raw | ConvertFrom-Json
+    }
+    catch {
+        throw 'bundle-manifest.json is not valid JSON. Re-download the release ZIP.'
+    }
+    if ($manifest.algorithm -ne 'SHA-256' -or $manifest.catalogMode -ne 'all-files-except-data-and-manifest') {
+        throw 'bundle-manifest.json has an unsupported catalog policy.'
+    }
+
+    $root = [System.IO.Path]::GetFullPath($Paths.Root).TrimEnd('\')
+    $rootPrefix = $root + '\'
+    $data = [System.IO.Path]::GetFullPath($Paths.Data).TrimEnd('\')
+    $dataPrefix = $data + '\'
+    $manifestPath = [System.IO.Path]::GetFullPath($Paths.BundleManifest)
+    $expected = @{}
+    $entries = @($manifest.files)
+    if ($entries.Count -eq 0) {
+        throw 'bundle-manifest.json does not contain any file entries.'
+    }
+
+    foreach ($entry in $entries) {
+        $entryPath = [string]$entry.path
+        if ([string]::IsNullOrWhiteSpace($entryPath) -or $entryPath.Contains('\')) {
+            throw "Manifest path is not normalized: $entryPath"
+        }
+        $candidate = [System.IO.Path]::GetFullPath((Join-Path $root $entryPath))
         if (-not $candidate.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "Manifest path escapes the portable root: $($entry.path)"
+            throw "Manifest path escapes the portable root: $entryPath"
+        }
+        if ($candidate.Equals($manifestPath, [System.StringComparison]::OrdinalIgnoreCase) -or
+            $candidate.Equals($data, [System.StringComparison]::OrdinalIgnoreCase) -or
+            $candidate.StartsWith($dataPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Manifest path targets excluded mutable state: $entryPath"
+        }
+        $normalized = $candidate.Substring($rootPrefix.Length).Replace('\', '/')
+        if ($normalized -cne $entryPath -or $expected.ContainsKey($normalized)) {
+            throw "Manifest contains a duplicate or non-canonical path: $entryPath"
+        }
+        if ([string]$entry.sha256 -notmatch '^[0-9a-f]{64}$') {
+            throw "Manifest contains an invalid SHA-256 value for $entryPath"
         }
         if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
-            throw "Manifest file is missing: $($entry.path)"
+            throw "Manifest file is missing: $entryPath"
+        }
+        $item = Get-Item -LiteralPath $candidate -Force
+        if ([long]$entry.size -ne [long]$item.Length) {
+            throw "Integrity size check failed for $entryPath. Re-download the release ZIP."
         }
         $actual = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($actual -ne ([string]$entry.sha256).ToLowerInvariant()) {
-            throw "Integrity check failed for $($entry.path). Re-download the release ZIP."
+            throw "Integrity check failed for $entryPath. Re-download the release ZIP."
         }
+        $expected[$normalized] = $true
+    }
+
+    $actualCount = 0
+    $directories = New-Object 'System.Collections.Generic.Queue[System.IO.DirectoryInfo]'
+    $directories.Enqueue((Get-Item -LiteralPath $root -Force))
+    while ($directories.Count -gt 0) {
+        $directory = $directories.Dequeue()
+        foreach ($item in @(Get-ChildItem -LiteralPath $directory.FullName -Force)) {
+            $fullName = [System.IO.Path]::GetFullPath($item.FullName)
+            if ($fullName.Equals($data, [System.StringComparison]::OrdinalIgnoreCase) -or
+                $fullName.StartsWith($dataPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
+            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Unexpected reparse point in the immutable bundle: $fullName"
+            }
+            if ($item.PSIsContainer) {
+                $directories.Enqueue($item)
+                continue
+            }
+            if ($fullName.Equals($manifestPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
+
+            $relative = $fullName.Substring($rootPrefix.Length).Replace('\', '/')
+            if (-not $expected.ContainsKey($relative)) {
+                throw "Unexpected file in the immutable bundle: $relative"
+            }
+            $actualCount++
+        }
+    }
+    if ($actualCount -ne $expected.Count) {
+        throw "Bundle catalog count mismatch. Expected $($expected.Count), found $actualCount."
     }
 }
 

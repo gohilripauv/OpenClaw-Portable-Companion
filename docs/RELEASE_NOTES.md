@@ -14,6 +14,10 @@ Initial community release.
 - Stops the exact Gateway process tree when the Companion exits.
 - Adds first-run ChatGPT/Codex OAuth and device-code helpers.
 - Includes a CycloneDX SBOM for independent dependency review.
+- Remediates all six findings from the pre-publication wrapper scan: trusted
+  PowerShell selection, mandatory complete bundle cataloging, direct OAuth-path
+  verification, recursive copied-state ACL repair, least-privilege release jobs,
+  and fail-closed Gateway containment.
 
 Read the README's requirements and security limitations before use on managed
 or removable devices.

@@ -63,6 +63,38 @@ try {
     & (Join-Path $PSScriptRoot 'Test-Portable.ps1') -BuiltBundle $bundleRoot
     & (Join-Path $PSScriptRoot 'Test-GatewayLifecycle.ps1') -BuiltBundle $bundleRoot
 
+    . (Join-Path $bundleRoot 'scripts\PortableEnvironment.ps1')
+    $bundlePaths = Get-PortablePaths -Root $bundleRoot
+    $unexpectedPath = Join-Path $bundleRoot 'app\unexpected-portable-test.dll'
+    try {
+        Write-Utf8NoBom -Path $unexpectedPath -Value 'unexpected'
+        $unexpectedRejected = $false
+        try { Test-BundleManifest -Paths $bundlePaths } catch { $unexpectedRejected = $true }
+        if (-not $unexpectedRejected) {
+            throw 'Bundle integrity accepted an unexpected executable-support file.'
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $unexpectedPath) {
+            Remove-Item -LiteralPath $unexpectedPath -Force
+        }
+    }
+
+    $manifestBackup = $bundlePaths.BundleManifest + '.portable-test-backup'
+    try {
+        Move-Item -LiteralPath $bundlePaths.BundleManifest -Destination $manifestBackup
+        $missingRejected = $false
+        try { Test-BundleManifest -Paths $bundlePaths } catch { $missingRejected = $true }
+        if (-not $missingRejected) {
+            throw 'Bundle integrity accepted a missing manifest.'
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $manifestBackup) {
+            Move-Item -LiteralPath $manifestBackup -Destination $bundlePaths.BundleManifest
+        }
+    }
+
     Write-Host "Release ZIP checks passed: $actualHash" -ForegroundColor Green
 }
 finally {

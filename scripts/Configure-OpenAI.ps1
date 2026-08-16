@@ -12,6 +12,7 @@ try {
     $root = Get-PortableRoot
     $paths = Get-PortablePaths -Root $root
     Assert-PortablePayload -Paths $paths
+    Test-BundleManifest -Paths $paths
     [void](Initialize-PortableState `
         -Paths $paths `
         -GatewayPort 18789 `

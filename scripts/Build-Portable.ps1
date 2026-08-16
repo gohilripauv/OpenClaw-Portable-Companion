@@ -248,30 +248,26 @@ try {
         (($buildInfo | ConvertTo-Json -Depth 5) + [Environment]::NewLine),
         $utf8NoBom)
 
-    $manifestPaths = @(
-        'Start-OpenClaw.bat',
-        'Configure-OpenAI.bat',
-        'Configure-OpenAI-Device-Code.bat',
-        'versions.json',
-        'scripts\PortableEnvironment.ps1',
-        'scripts\Configure-OpenAI.ps1',
-        'scripts\Start-OpenClaw.ps1',
-        'app\OpenClaw.Tray.WinUI.exe',
-        'runtime\node.exe',
-        'gateway\package.json',
-        'gateway\package-lock.json',
-        'gateway\node_modules\openclaw\openclaw.mjs',
-        'SBOM.cdx.json')
-    $manifestEntries = foreach ($relativePath in $manifestPaths) {
-        $absolutePath = Join-Path $bundleRoot $relativePath
+    $bundlePrefix = $bundleRoot.TrimEnd('\') + '\'
+    $bundleItems = @(Get-ChildItem -LiteralPath $bundleRoot -Force -Recurse)
+    $reparsePoints = @($bundleItems | Where-Object {
+        ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+    })
+    if ($reparsePoints.Count -gt 0) {
+        throw "Release staging contains an unexpected reparse point: $($reparsePoints[0].FullName)"
+    }
+
+    $manifestEntries = foreach ($file in @($bundleItems | Where-Object { -not $_.PSIsContainer } | Sort-Object FullName)) {
+        $relativePath = $file.FullName.Substring($bundlePrefix.Length).Replace('\', '/')
         [ordered]@{
-            path = $relativePath.Replace('\', '/')
-            sha256 = (Get-FileHash -LiteralPath $absolutePath -Algorithm SHA256).Hash.ToLowerInvariant()
-            size = (Get-Item -LiteralPath $absolutePath).Length
+            path = $relativePath
+            sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            size = $file.Length
         }
     }
     $bundleManifest = [ordered]@{
         algorithm = 'SHA-256'
+        catalogMode = 'all-files-except-data-and-manifest'
         files = @($manifestEntries)
     }
     [System.IO.File]::WriteAllText(

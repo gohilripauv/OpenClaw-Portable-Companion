@@ -67,6 +67,16 @@ Assert-True -Condition ($launcherText -notmatch '(?i)powershell(?:\.exe)?[^\r\n]
 Assert-True -Condition ($launcherText -match '(?i)--bind'',\s*''loopback') -Message 'The Gateway launcher does not explicitly bind to loopback.'
 Assert-True -Condition ($launcherText -match '(?i)--auth'',\s*''token') -Message 'The Gateway launcher does not explicitly require token authentication.'
 
+foreach ($batchName in @('Start-OpenClaw.bat', 'Configure-OpenAI.bat', 'Configure-OpenAI-Device-Code.bat')) {
+    $batchText = Get-Content -LiteralPath (Join-Path $sourceRoot $batchName) -Raw
+    Assert-True `
+        -Condition ($batchText -match '(?i)%SystemRoot%\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe') `
+        -Message "$batchName does not select Windows PowerShell through an absolute trusted path."
+    Assert-True `
+        -Condition ($batchText -notmatch '(?im)^\s*powershell\.exe\s') `
+        -Message "$batchName invokes powershell.exe through ambient executable search order."
+}
+
 . (Join-Path $sourceRoot 'scripts\PortableEnvironment.ps1')
 $quoted = ConvertTo-WindowsCommandLineArgument -Argument "C:\Folder With Space\O'Brien\openclaw.mjs"
 Assert-True -Condition ($quoted.StartsWith('"') -and $quoted.EndsWith('"')) -Message 'Windows argument quoting did not quote a spaced path.'
@@ -96,6 +106,13 @@ foreach ($name in $environmentNames) {
 try {
     $testPaths = Get-PortablePaths -Root $testRoot
     $state = Initialize-PortableState -Paths $testPaths -GatewayPort 28491 -NonInteractive
+    $aclProbe = Join-Path $testPaths.State 'acl-probe.txt'
+    Write-Utf8NoBom -Path $aclProbe -Value 'ACL probe'
+    if ($state.FileSystem -in @('NTFS', 'ReFS')) {
+        $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+        & $icacls $aclProbe /inheritance:r /grant:r '*S-1-1-0:R' | Out-Null
+        Assert-True -Condition ($LASTEXITCODE -eq 0) -Message 'Could not prepare the copied-descendant ACL test.'
+    }
     $secondState = Initialize-PortableState -Paths $testPaths -GatewayPort 28491 -NonInteractive
     Assert-True -Condition (Test-Path -LiteralPath $testPaths.Config -PathType Leaf) -Message 'State initialization did not create openclaw.json.'
     Assert-True -Condition (Test-Path -LiteralPath (Join-Path $testPaths.Companion 'gateways.json') -PathType Leaf) -Message 'State initialization did not create gateways.json.'
@@ -115,6 +132,15 @@ try {
     if ($state.FileSystem -in @('NTFS', 'ReFS')) {
         $acl = Get-Acl -LiteralPath $testPaths.Data
         Assert-True -Condition $acl.AreAccessRulesProtected -Message 'The portable data ACL still inherits ambient permissions.'
+        $probeAcl = Get-Acl -LiteralPath $aclProbe
+        $broadRules = @($probeAcl.Access | Where-Object {
+            try {
+                $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq 'S-1-1-0'
+            }
+            catch { $false }
+        })
+        Assert-True -Condition (-not $probeAcl.AreAccessRulesProtected) -Message 'A copied descendant retained a protected ACL.'
+        Assert-True -Condition ($broadRules.Count -eq 0) -Message 'A copied descendant retained an explicit Everyone ACL.'
     }
 }
 finally {

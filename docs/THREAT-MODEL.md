@@ -24,17 +24,23 @@ dependency risk-free.
 - Command injection through a folder containing spaces or apostrophes: native
   processes receive argument arrays or Win32-quoted arguments; no path is
   interpolated into a nested PowerShell command.
+- Executable search-order hijacking: batch entry points invoke the absolute
+  Windows PowerShell system path rather than searching the portable directory.
+- Partial post-extraction tampering: every shipped immutable file is hashed and
+  unexpected files or reparse points outside `data\` cause startup failure.
 - Accidental use of an unrelated local process: an occupied Gateway port causes
   failure, not process termination or unauthenticated reuse.
 - Orphaned Gateway after normal or abnormal launcher exit: the wrapper records
   the exact process and attaches it to a kill-on-close Windows job object.
 - Ambient access to credentials: the `data\` ACL is reduced to the current user,
-  SYSTEM, and local Administrators on NTFS/ReFS.
+  SYSTEM, and local Administrators on NTFS/ReFS, including recursive repair of
+  explicit ACLs retained by a previous ACL-aware copy.
 
 ## Residual risks
 
 - An attacker who can modify the wrapper or all release files can also alter the
-  verification logic. Verify the published ZIP checksum before extraction.
+  verification logic and its same-folder catalog. Verify the published ZIP
+  checksum before extraction and again after untrusted custody of the media.
 - Local Administrators and sufficiently privileged endpoint software can read
   or alter portable state.
 - FAT/exFAT and many network filesystems do not preserve the required ACLs.

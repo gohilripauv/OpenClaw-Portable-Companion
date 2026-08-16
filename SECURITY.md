@@ -28,7 +28,14 @@ OpenClaw component. Redacted logs are welcome.
   SBOM. An audit result is a point-in-time signal, not proof of safety.
 - Release ZIP SHA-256 values are published alongside every release.
 - Release assembly runs on native x64 and ARM64 Windows runners.
+- Build jobs have read-only repository permission and do not retain checkout
+  credentials while npm lifecycle scripts execute.
+- The runtime catalog covers every shipped immutable file and fails closed, but
+  remains a same-folder defense-in-depth control rather than a signed trust root.
 
 These controls make substitution detectable; they do not turn this community
 wrapper into an official OpenClaw build. Users should review source, verify the
 download checksum, and follow their organization's endpoint policy.
+
+The initial wrapper underwent a complete 26-file standard security review before
+publication. See `docs/SECURITY-REVIEW.md` for its remediation record.

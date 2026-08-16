@@ -1,7 +1,12 @@
 @echo off
 setlocal
+set "OPENCLAW_PORTABLE_POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+if not exist "%OPENCLAW_PORTABLE_POWERSHELL%" (
+  echo Trusted Windows PowerShell was not found at "%OPENCLAW_PORTABLE_POWERSHELL%".
+  exit /b 1
+)
 cd /d "%~dp0"
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\Start-OpenClaw.ps1"
+"%OPENCLAW_PORTABLE_POWERSHELL%" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\Start-OpenClaw.ps1"
 set "OPENCLAW_PORTABLE_EXIT=%ERRORLEVEL%"
 if not "%OPENCLAW_PORTABLE_EXIT%"=="0" (
   echo.

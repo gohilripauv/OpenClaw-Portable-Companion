@@ -81,8 +81,11 @@ you need from `data\workspace`, then remove `data\` while the app is stopped.
 The Gateway is always launched with `--bind loopback --auth token`. A random
 256-bit token is generated locally and never placed on a command line. If the
 default port is occupied, the launcher fails closed instead of killing or
-reusing an unidentified process. Key launch files are rehashed at startup, and
-the Companion publisher signature is checked before execution.
+reusing an unidentified process. Every shipped immutable file is cataloged and
+rehashed at startup, unexpected files in the executable trees are rejected, and
+the Companion publisher signature is checked before execution. This same-folder
+catalog is defense in depth; verification of the published ZIP checksum remains
+the trust anchor against complete folder replacement.
 
 The initial Companion settings disable Windows-node capabilities (screen,
 camera, location, browser proxy, and system execution). OpenClaw itself remains
@@ -110,7 +113,8 @@ CycloneDX SBOM under `dist\`.
 ARM64 artifacts are assembled on GitHub's native `windows-11-arm` runner so
 native optional dependencies and install scripts see the correct architecture.
 The manual release workflow creates a draft first and publishes it only after
-both architecture builds succeed.
+both architecture builds succeed. Build jobs have read-only repository access
+and no persisted Git credential; a separate job uploads the verified artifacts.
 
 ## Updating upstream pins
 
@@ -127,7 +131,8 @@ Do not replace version strings alone. For each update:
    the extracted folder, port-conflict failure, and Gateway cleanup.
 
 See [the design decision](docs/DECISION.md) for the comparison with the earlier
-USB launcher and a source fork.
+USB launcher and a source fork, and [the pre-release security review](docs/SECURITY-REVIEW.md)
+for the issues fixed before the first public release.
 
 ## Trademark and support
 

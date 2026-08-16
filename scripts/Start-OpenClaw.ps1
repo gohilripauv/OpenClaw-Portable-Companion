@@ -220,6 +220,11 @@ try {
         '--bind', 'loopback',
         '--auth', 'token')
 
+    $jobHandle = Initialize-KillOnCloseJob
+    if ($jobHandle -eq [IntPtr]::Zero) {
+        throw 'Could not create the required kill-on-close job. The Gateway was not started.'
+    }
+
     Write-Host ''
     Write-Host "Starting authenticated Gateway on 127.0.0.1:$GatewayPort..." -ForegroundColor Cyan
     $gatewayProcess = Start-Process `
@@ -231,16 +236,8 @@ try {
         -RedirectStandardError $standardError `
         -PassThru
 
-    $jobHandle = Initialize-KillOnCloseJob
-    if ($jobHandle -ne [IntPtr]::Zero) {
-        if (-not [OpenClawPortable.NativeJob]::AssignProcessToJobObject($jobHandle, $gatewayProcess.Handle)) {
-            [void][OpenClawPortable.NativeJob]::CloseHandle($jobHandle)
-            $jobHandle = [IntPtr]::Zero
-            Write-Warning 'Could not attach the Gateway to a kill-on-close job; normal shutdown cleanup remains active.'
-        }
-    }
-    else {
-        Write-Warning 'Could not create a kill-on-close job; normal shutdown cleanup remains active.'
+    if (-not [OpenClawPortable.NativeJob]::AssignProcessToJobObject($jobHandle, $gatewayProcess.Handle)) {
+        throw 'Could not attach the Gateway to the required kill-on-close job.'
     }
 
     $deadline = (Get-Date).AddSeconds(45)
