@@ -123,8 +123,10 @@ Do not replace version strings alone. For each update:
 1. Review the official Companion and OpenClaw release notes.
 2. Update both architecture URLs and verified archive digests in
    `versions.json`.
-3. Update `gateway/package.json`, regenerate `gateway/package-lock.json`, and
-   confirm the OpenClaw package integrity matches the npm registry metadata.
+3. Update `gateway/package.json`, regenerate `gateway/package-lock.json` using
+   npm from the pinned Node archive, and confirm the OpenClaw package integrity
+   matches the npm registry metadata. Validate the graph with `npm sbom`; do not
+   regenerate the lock with an arbitrary older host npm.
 4. Run tests and a full x64 build locally; let the release workflow build ARM64
    on native hardware.
 5. Test first-run OAuth, authenticated Companion connection, chat, movement of

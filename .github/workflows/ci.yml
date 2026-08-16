@@ -21,7 +21,10 @@ jobs:
         shell: powershell
         run: .\scripts\Test-Portable.ps1
 
-      - name: Audit locked production dependencies
+      - name: Audit and validate locked production dependencies
         working-directory: gateway
         shell: powershell
-        run: npm audit --package-lock-only --omit=dev --audit-level=moderate
+        run: |
+          npm audit --package-lock-only --omit=dev --audit-level=moderate
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm sbom --package-lock-only --sbom-format cyclonedx | Out-Null
