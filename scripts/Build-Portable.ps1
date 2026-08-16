@@ -184,7 +184,9 @@ try {
 
     $npm = Join-Path $runtimeDestination 'npm.cmd'
     $previousNpmCache = $env:NPM_CONFIG_CACHE
+    $previousBuildPath = $env:PATH
     $env:NPM_CONFIG_CACHE = Join-Path $cacheRoot 'npm'
+    $env:PATH = $runtimeDestination + [System.IO.Path]::PathSeparator + $previousBuildPath
     try {
         Push-Location $gatewayDestination
         try {
@@ -213,6 +215,7 @@ try {
     }
     finally {
         $env:NPM_CONFIG_CACHE = $previousNpmCache
+        $env:PATH = $previousBuildPath
     }
 
     $openClawEntry = Join-Path $gatewayDestination 'node_modules\openclaw\openclaw.mjs'
