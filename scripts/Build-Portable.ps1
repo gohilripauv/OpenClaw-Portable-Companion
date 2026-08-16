@@ -8,6 +8,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
+. (Join-Path $PSScriptRoot 'PortableEnvironment.ps1')
 
 $sourceRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $outputRoot = [System.IO.Path]::GetFullPath($OutputDirectory)
@@ -251,27 +252,13 @@ try {
         (($buildInfo | ConvertTo-Json -Depth 5) + [Environment]::NewLine),
         $utf8NoBom)
 
-    $bundlePrefix = $bundleRoot.TrimEnd('\') + '\'
-    $bundleItems = @(Get-ChildItem -LiteralPath $bundleRoot -Force -Recurse)
-    $reparsePoints = @($bundleItems | Where-Object {
-        ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
-    })
-    if ($reparsePoints.Count -gt 0) {
-        throw "Release staging contains an unexpected reparse point: $($reparsePoints[0].FullName)"
-    }
-
-    $manifestEntries = foreach ($file in @($bundleItems | Where-Object { -not $_.PSIsContainer } | Sort-Object FullName)) {
-        $relativePath = $file.FullName.Substring($bundlePrefix.Length).Replace('\', '/')
-        [ordered]@{
-            path = $relativePath
-            sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            size = $file.Length
-        }
-    }
+    $catalog = Get-ImmutableBundleCatalog -Root $bundleRoot
     $bundleManifest = [ordered]@{
         algorithm = 'SHA-256'
-        catalogMode = 'all-files-except-data-and-manifest'
-        files = @($manifestEntries)
+        catalogMode = 'tree-sha256-all-files-except-data-and-manifest'
+        treeSha256 = $catalog.TreeSha256
+        fileCount = $catalog.FileCount
+        totalBytes = $catalog.TotalBytes
     }
     [System.IO.File]::WriteAllText(
         (Join-Path $bundleRoot 'bundle-manifest.json'),

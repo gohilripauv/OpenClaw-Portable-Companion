@@ -195,77 +195,23 @@ function Assert-PortablePayload {
     }
 }
 
-function Test-BundleManifest {
-    param([Parameter(Mandatory = $true)]$Paths)
+function Get-ImmutableBundleCatalog {
+    param([Parameter(Mandatory = $true)][string]$Root)
 
-    if (-not (Test-Path -LiteralPath $Paths.BundleManifest -PathType Leaf)) {
-        throw 'bundle-manifest.json is missing. Re-download and re-extract the release ZIP.'
-    }
-
-    try {
-        $manifest = Get-Content -LiteralPath $Paths.BundleManifest -Raw | ConvertFrom-Json
-    }
-    catch {
-        throw 'bundle-manifest.json is not valid JSON. Re-download the release ZIP.'
-    }
-    if ($manifest.algorithm -ne 'SHA-256' -or $manifest.catalogMode -ne 'all-files-except-data-and-manifest') {
-        throw 'bundle-manifest.json has an unsupported catalog policy.'
-    }
-
-    $root = [System.IO.Path]::GetFullPath($Paths.Root).TrimEnd('\')
-    $rootPrefix = $root + '\'
-    $data = [System.IO.Path]::GetFullPath($Paths.Data).TrimEnd('\')
-    $dataPrefix = $data + '\'
-    $manifestPath = [System.IO.Path]::GetFullPath($Paths.BundleManifest)
-    $expected = @{}
-    $entries = @($manifest.files)
-    if ($entries.Count -eq 0) {
-        throw 'bundle-manifest.json does not contain any file entries.'
-    }
-
-    foreach ($entry in $entries) {
-        $entryPath = [string]$entry.path
-        if ([string]::IsNullOrWhiteSpace($entryPath) -or $entryPath.Contains('\')) {
-            throw "Manifest path is not normalized: $entryPath"
-        }
-        $candidate = [System.IO.Path]::GetFullPath((Join-Path $root $entryPath))
-        if (-not $candidate.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "Manifest path escapes the portable root: $entryPath"
-        }
-        if ($candidate.Equals($manifestPath, [System.StringComparison]::OrdinalIgnoreCase) -or
-            $candidate.Equals($data, [System.StringComparison]::OrdinalIgnoreCase) -or
-            $candidate.StartsWith($dataPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "Manifest path targets excluded mutable state: $entryPath"
-        }
-        $normalized = $candidate.Substring($rootPrefix.Length).Replace('\', '/')
-        if ($normalized -cne $entryPath -or $expected.ContainsKey($normalized)) {
-            throw "Manifest contains a duplicate or non-canonical path: $entryPath"
-        }
-        if ([string]$entry.sha256 -notmatch '^[0-9a-f]{64}$') {
-            throw "Manifest contains an invalid SHA-256 value for $entryPath"
-        }
-        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
-            throw "Manifest file is missing: $entryPath"
-        }
-        $item = Get-Item -LiteralPath $candidate -Force
-        if ([long]$entry.size -ne [long]$item.Length) {
-            throw "Integrity size check failed for $entryPath. Re-download the release ZIP."
-        }
-        $actual = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($actual -ne ([string]$entry.sha256).ToLowerInvariant()) {
-            throw "Integrity check failed for $entryPath. Re-download the release ZIP."
-        }
-        $expected[$normalized] = $true
-    }
-
-    $actualCount = 0
+    $rootPath = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $rootPrefix = $rootPath + '\'
+    $dataPath = [System.IO.Path]::GetFullPath((Join-Path $rootPath 'data')).TrimEnd('\')
+    $dataPrefix = $dataPath + '\'
+    $manifestPath = [System.IO.Path]::GetFullPath((Join-Path $rootPath 'bundle-manifest.json'))
+    $files = @{}
     $directories = New-Object 'System.Collections.Generic.Queue[System.IO.DirectoryInfo]'
-    $directories.Enqueue((Get-Item -LiteralPath $root -Force))
+    $directories.Enqueue((Get-Item -LiteralPath $rootPath -Force))
+
     while ($directories.Count -gt 0) {
         $directory = $directories.Dequeue()
         foreach ($item in @(Get-ChildItem -LiteralPath $directory.FullName -Force)) {
             $fullName = [System.IO.Path]::GetFullPath($item.FullName)
-            if ($fullName.Equals($data, [System.StringComparison]::OrdinalIgnoreCase) -or
+            if ($fullName.Equals($dataPath, [System.StringComparison]::OrdinalIgnoreCase) -or
                 $fullName.StartsWith($dataPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
                 continue
             }
@@ -281,14 +227,88 @@ function Test-BundleManifest {
             }
 
             $relative = $fullName.Substring($rootPrefix.Length).Replace('\', '/')
-            if (-not $expected.ContainsKey($relative)) {
-                throw "Unexpected file in the immutable bundle: $relative"
+            if ($files.ContainsKey($relative)) {
+                throw "Duplicate immutable bundle path: $relative"
             }
-            $actualCount++
+            $files[$relative] = $fullName
         }
     }
-    if ($actualCount -ne $expected.Count) {
-        throw "Bundle catalog count mismatch. Expected $($expected.Count), found $actualCount."
+
+    $relativePaths = [string[]]@($files.Keys)
+    [Array]::Sort($relativePaths, [System.StringComparer]::Ordinal)
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    $hasher = [System.Security.Cryptography.SHA256]::Create()
+    $totalBytes = [long]0
+    try {
+        $domain = $encoding.GetBytes('OpenClawPortableCatalogV1')
+        [void]$hasher.TransformBlock($domain, 0, $domain.Length, $domain, 0)
+        $buffer = New-Object byte[] 131072
+
+        foreach ($relativePath in $relativePaths) {
+            $pathBytes = $encoding.GetBytes($relativePath)
+            $stream = [System.IO.File]::Open(
+                [string]$files[$relativePath],
+                [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::Read,
+                [System.IO.FileShare]::Read)
+            try {
+                $length = [long]$stream.Length
+                $totalBytes += $length
+                $metadata = New-Object byte[] 12
+                [System.Buffer]::BlockCopy([System.BitConverter]::GetBytes([int]$pathBytes.Length), 0, $metadata, 0, 4)
+                [System.Buffer]::BlockCopy([System.BitConverter]::GetBytes($length), 0, $metadata, 4, 8)
+                [void]$hasher.TransformBlock($metadata, 0, $metadata.Length, $metadata, 0)
+                [void]$hasher.TransformBlock($pathBytes, 0, $pathBytes.Length, $pathBytes, 0)
+
+                while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    [void]$hasher.TransformBlock($buffer, 0, $read, $buffer, 0)
+                }
+            }
+            finally {
+                $stream.Dispose()
+            }
+        }
+
+        [void]$hasher.TransformFinalBlock((New-Object byte[] 0), 0, 0)
+        $treeHash = [System.BitConverter]::ToString($hasher.Hash).Replace('-', '').ToLowerInvariant()
+    }
+    finally {
+        $hasher.Dispose()
+    }
+
+    return [pscustomobject]@{
+        TreeSha256 = $treeHash
+        FileCount = $relativePaths.Count
+        TotalBytes = $totalBytes
+    }
+}
+
+function Test-BundleManifest {
+    param([Parameter(Mandatory = $true)]$Paths)
+
+    if (-not (Test-Path -LiteralPath $Paths.BundleManifest -PathType Leaf)) {
+        throw 'bundle-manifest.json is missing. Re-download and re-extract the release ZIP.'
+    }
+
+    try {
+        $manifest = Get-Content -LiteralPath $Paths.BundleManifest -Raw | ConvertFrom-Json
+    }
+    catch {
+        throw 'bundle-manifest.json is not valid JSON. Re-download the release ZIP.'
+    }
+    if ($manifest.algorithm -ne 'SHA-256' -or
+        $manifest.catalogMode -ne 'tree-sha256-all-files-except-data-and-manifest' -or
+        [string]$manifest.treeSha256 -notmatch '^[0-9a-f]{64}$' -or
+        [long]$manifest.fileCount -lt 1 -or
+        [long]$manifest.totalBytes -lt 1) {
+        throw 'bundle-manifest.json has an unsupported catalog policy.'
+    }
+
+    $actual = Get-ImmutableBundleCatalog -Root $Paths.Root
+    if ($actual.TreeSha256 -ne ([string]$manifest.treeSha256).ToLowerInvariant() -or
+        [long]$actual.FileCount -ne [long]$manifest.fileCount -or
+        [long]$actual.TotalBytes -ne [long]$manifest.totalBytes) {
+        throw 'Immutable bundle integrity check failed. Re-download and re-extract the release ZIP.'
     }
 }
 
