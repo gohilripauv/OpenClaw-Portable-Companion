@@ -22,8 +22,9 @@ OpenClaw component. Redacted logs are welcome.
 - Official Companion and Node.js archives are pinned by SHA-256 in
   `versions.json`.
 - The Companion's Authenticode publisher is checked during assembly and launch.
-- OpenClaw is an exact npm dependency with a committed lockfile and recorded npm
-  integrity value.
+- OpenClaw, the official `@openclaw/codex` plugin, and its managed
+  `@openai/codex` runtime are exact npm dependencies with a committed lockfile
+  and recorded npm integrity values.
 - Release builds fail on moderate-or-higher npm advisories and emit a CycloneDX
   SBOM. An audit result is a point-in-time signal, not proof of safety.
 - Release ZIP SHA-256 values are published alongside every release.
@@ -38,4 +39,5 @@ wrapper into an official OpenClaw build. Users should review source, verify the
 download checksum, and follow their organization's endpoint policy.
 
 The initial wrapper underwent a complete 26-file standard security review before
-publication. See `docs/SECURITY-REVIEW.md` for its remediation record.
+publication. The Codex integration adds OAuth-only and runtime-provenance checks
+to that baseline. See `docs/SECURITY-REVIEW.md` for the remediation record.

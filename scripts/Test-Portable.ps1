@@ -36,6 +36,8 @@ Write-Host 'Checking version and dependency pins...'
 $versions = Get-Content -LiteralPath (Join-Path $sourceRoot 'versions.json') -Raw | ConvertFrom-Json
 Assert-True -Condition ([string]$versions.wrapperVersion -match '^\d+\.\d+\.\d+$') -Message 'wrapperVersion must be SemVer.'
 Assert-True -Condition ([string]$versions.openClaw.version -match '^\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') -Message 'OpenClaw must use an exact published version.'
+Assert-True -Condition ([string]$versions.codexPlugin.version -match '^\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') -Message 'The Codex plugin must use an exact published version.'
+Assert-True -Condition ([string]$versions.codexPlugin.managedCodexVersion -match '^\d+\.\d+\.\d+$') -Message 'Managed Codex must use an exact version.'
 foreach ($architecture in @('x64', 'arm64')) {
     $nodeInfo = $versions.node.architectures.$architecture
     $companionInfo = $versions.companion.architectures.$architecture
@@ -49,12 +51,23 @@ $package = Get-Content -LiteralPath (Join-Path $sourceRoot 'gateway\package.json
 Assert-True `
     -Condition ([string]$package.dependencies.openclaw -eq [string]$versions.openClaw.version) `
     -Message 'gateway/package.json does not match the OpenClaw pin in versions.json.'
+Assert-True `
+    -Condition ([string]$package.dependencies.'@openclaw/codex' -eq [string]$versions.codexPlugin.version) `
+    -Message 'gateway/package.json does not match the Codex plugin pin in versions.json.'
 
 $lockText = Get-Content -LiteralPath (Join-Path $sourceRoot 'gateway\package-lock.json') -Raw
 $openClawLockPattern = '(?s)"node_modules/openclaw"\s*:\s*\{.*?"version"\s*:\s*"' +
     [regex]::Escape([string]$versions.openClaw.version) + '".*?"integrity"\s*:\s*"' +
     [regex]::Escape([string]$versions.openClaw.npmIntegrity) + '"'
 Assert-True -Condition ($lockText -match $openClawLockPattern) -Message 'package-lock.json does not match the recorded OpenClaw version and integrity.'
+$codexPluginLockPattern = '(?s)"node_modules/@openclaw/codex"\s*:\s*\{.*?"version"\s*:\s*"' +
+    [regex]::Escape([string]$versions.codexPlugin.version) + '".*?"integrity"\s*:\s*"' +
+    [regex]::Escape([string]$versions.codexPlugin.npmIntegrity) + '"'
+Assert-True -Condition ($lockText -match $codexPluginLockPattern) -Message 'package-lock.json does not match the recorded Codex plugin version and integrity.'
+$managedCodexLockPattern = '(?s)"node_modules/@openai/codex"\s*:\s*\{.*?"version"\s*:\s*"' +
+    [regex]::Escape([string]$versions.codexPlugin.managedCodexVersion) + '".*?"integrity"\s*:\s*"' +
+    [regex]::Escape([string]$versions.codexPlugin.managedCodexNpmIntegrity) + '"'
+Assert-True -Condition ($lockText -match $managedCodexLockPattern) -Message 'package-lock.json does not match the recorded managed Codex version and integrity.'
 
 Write-Host 'Checking launcher security invariants...'
 $launcherText = (Get-ChildItem -LiteralPath (Join-Path $sourceRoot 'scripts') -Filter '*.ps1' |
@@ -64,6 +77,8 @@ Assert-True -Condition ($launcherText -notmatch '(?i)--auth\s+["'']?none') -Mess
 Assert-True -Condition ($launcherText -notmatch '(?i)openclaw@latest') -Message 'A launcher uses the mutable openclaw@latest specifier.'
 Assert-True -Condition ($launcherText -notmatch '(?i)Invoke-Expression') -Message 'A launcher uses Invoke-Expression.'
 Assert-True -Condition ($launcherText -notmatch '(?i)powershell(?:\.exe)?[^\r\n]+-Command') -Message 'A launcher builds a nested PowerShell -Command string.'
+Assert-True -Condition ($launcherText -notmatch 'codex/managed-app-server') -Message 'A launcher uses the incompatible managed Codex doctor check ID.'
+Assert-True -Condition ($launcherText -match 'Assert-ManagedCodexRuntime') -Message 'The bundled managed Codex runtime is not verified before OAuth setup.'
 Assert-True -Condition ($launcherText -match '(?i)--bind'',\s*''loopback') -Message 'The Gateway launcher does not explicitly bind to loopback.'
 Assert-True -Condition ($launcherText -match '(?i)--auth'',\s*''token') -Message 'The Gateway launcher does not explicitly require token authentication.'
 
@@ -90,6 +105,8 @@ $environmentNames = @(
     'OPENCLAW_HOME',
     'OPENCLAW_STATE_DIR',
     'OPENCLAW_CONFIG_PATH',
+    'OPENCLAW_PORTABLE_ROOT',
+    'CODEX_HOME',
     'OPENCLAW_GATEWAY_TOKEN',
     'OPENCLAW_GATEWAY_PORT',
     'OPENCLAW_TRAY_DATA_DIR',
@@ -97,6 +114,8 @@ $environmentNames = @(
     'OPENCLAW_TRAY_LOCALAPPDATA_DIR',
     'OPENCLAW_SKIP_UPDATE_CHECK',
     'NPM_CONFIG_CACHE',
+    'OPENAI_API_KEY',
+    'CODEX_API_KEY',
     'TEMP',
     'TMP')
 $savedEnvironment = @{}
@@ -104,6 +123,8 @@ foreach ($name in $environmentNames) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 try {
+    $env:OPENAI_API_KEY = 'portable-test-must-not-survive'
+    $env:CODEX_API_KEY = 'portable-test-must-not-survive'
     $testPaths = Get-PortablePaths -Root $testRoot
     $state = Initialize-PortableState -Paths $testPaths -GatewayPort 28491 -NonInteractive
     $aclProbe = Join-Path $testPaths.State 'acl-probe.txt'
@@ -123,6 +144,18 @@ try {
     Assert-True -Condition ($config.gateway.bind -eq 'loopback') -Message 'Generated config is not loopback-only.'
     Assert-True -Condition ($config.gateway.auth.mode -eq 'token') -Message 'Generated config does not use token auth.'
     Assert-True -Condition ($config.gateway.auth.token -eq '${OPENCLAW_GATEWAY_TOKEN}') -Message 'Generated config embeds or misreferences the Gateway token.'
+    Assert-True -Condition ($config.agents.defaults.workspace -eq '${OPENCLAW_PORTABLE_ROOT}/data/workspace') -Message 'Generated config does not use a movable workspace path.'
+    Assert-True -Condition ($config.agents.defaults.model.primary -eq 'openai/gpt-5.6-sol') -Message 'Generated config does not select the expected OpenAI model.'
+    Assert-True -Condition ($config.agents.defaults.models.'openai/*'.agentRuntime.id -eq 'codex') -Message 'Generated config does not fail closed on the Codex runtime.'
+    Assert-True -Condition ($config.plugins.entries.codex.enabled -eq $true) -Message 'Generated config does not enable the Codex plugin.'
+    Assert-True -Condition ($config.plugins.entries.codex.config.appServer.mode -eq 'guardian') -Message 'Generated config does not use Codex guardian permissions.'
+    Assert-True -Condition ($config.plugins.entries.codex.config.appServer.homeScope -eq 'agent') -Message 'Generated config does not isolate Codex state under the portable agent.'
+    Assert-True -Condition ($env:CODEX_HOME -eq $testPaths.CodexHome) -Message 'Portable initialization did not isolate ambient native Codex state.'
+    $openAiKeyAfterInit = [Environment]::GetEnvironmentVariable('OPENAI_API_KEY', 'Process')
+    $codexKeyAfterInit = [Environment]::GetEnvironmentVariable('CODEX_API_KEY', 'Process')
+    Assert-True -Condition (
+        [string]::IsNullOrWhiteSpace($openAiKeyAfterInit) -and
+        [string]::IsNullOrWhiteSpace($codexKeyAfterInit)) -Message 'Portable initialization did not clear inherited OpenAI API-key fallbacks.'
 
     $registry = Get-Content -LiteralPath (Join-Path $testPaths.Companion 'gateways.json') -Raw | ConvertFrom-Json
     Assert-True -Condition (@($registry.gateways).Count -eq 1) -Message 'Generated Companion registry has an unexpected Gateway count.'

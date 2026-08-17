@@ -18,6 +18,7 @@ function Get-PortablePaths {
         Companion        = Join-Path $data 'companion'
         CompanionSetup   = Join-Path $data 'companion-setup'
         Workspace        = Join-Path $data 'workspace'
+        CodexHome        = Join-Path $data 'codex-home'
         Secrets          = Join-Path $data 'secrets'
         Token            = Join-Path $data 'secrets\gateway-token.txt'
         GatewayId        = Join-Path $data 'secrets\gateway-id.txt'
@@ -27,10 +28,13 @@ function Get-PortablePaths {
         NpmCache         = Join-Path $data 'npm-cache'
         Node             = Join-Path $Root 'runtime\node.exe'
         OpenClawEntry    = Join-Path $Root 'gateway\node_modules\openclaw\openclaw.mjs'
+        CodexPlugin      = Join-Path $Root 'gateway\node_modules\openclaw\dist\extensions\codex'
+        CodexManifest    = Join-Path $Root 'gateway\node_modules\openclaw\dist\extensions\codex\openclaw.plugin.json'
+        ManagedCodex     = Join-Path $Root 'gateway\node_modules\@openai\codex\bin\codex.js'
         CompanionExe     = Join-Path $Root 'app\OpenClaw.Tray.WinUI.exe'
         Versions         = Join-Path $Root 'versions.json'
         BundleManifest   = Join-Path $Root 'bundle-manifest.json'
-        ConfiguredMarker = Join-Path $data 'config\openai-configured.marker'
+        ConfiguredMarker = Join-Path $data 'config\codex-oauth-configured.marker'
     }
 }
 
@@ -170,6 +174,7 @@ function Initialize-PortableDirectories {
         $Paths.Companion,
         $Paths.CompanionSetup,
         $Paths.Workspace,
+        $Paths.CodexHome,
         $Paths.Secrets,
         $Paths.Runtime,
         $Paths.Logs,
@@ -187,12 +192,34 @@ function Assert-PortablePayload {
     foreach ($required in @(
         $Paths.Node,
         $Paths.OpenClawEntry,
+        $Paths.CodexManifest,
+        $Paths.ManagedCodex,
         $Paths.CompanionExe,
         $Paths.Versions)) {
         if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
             throw "The portable payload is incomplete. Missing: $required"
         }
     }
+}
+
+function Assert-ManagedCodexRuntime {
+    param([Parameter(Mandatory = $true)]$Paths)
+
+    $versions = Get-Content -LiteralPath $Paths.Versions -Raw | ConvertFrom-Json
+    $expectedVersion = [string]$versions.codexPlugin.managedCodexVersion
+    if ($expectedVersion -notmatch '^\d+\.\d+\.\d+$') {
+        throw "The pinned managed Codex version is invalid: $expectedVersion"
+    }
+
+    $output = & $Paths.Node $Paths.ManagedCodex --version 2>&1
+    $exitCode = $LASTEXITCODE
+    $reportedVersion = ($output -join [Environment]::NewLine).Trim()
+    $versionPattern = '(^|\s)' + [regex]::Escape($expectedVersion) + '($|\s)'
+    if ($exitCode -ne 0 -or $reportedVersion -notmatch $versionPattern) {
+        throw "The bundled managed Codex runtime failed verification (expected $expectedVersion): $reportedVersion"
+    }
+
+    return $reportedVersion
 }
 
 function Get-ImmutableBundleCatalog {
@@ -345,6 +372,8 @@ function Set-PortableEnvironment {
     $env:OPENCLAW_HOME = $Paths.State
     $env:OPENCLAW_STATE_DIR = $Paths.State
     $env:OPENCLAW_CONFIG_PATH = $Paths.Config
+    $env:OPENCLAW_PORTABLE_ROOT = $Paths.Root
+    $env:CODEX_HOME = $Paths.CodexHome
     $env:OPENCLAW_GATEWAY_TOKEN = $Token
     $env:OPENCLAW_GATEWAY_PORT = [string]$GatewayPort
     $env:OPENCLAW_TRAY_DATA_DIR = $Paths.Companion
@@ -354,6 +383,12 @@ function Set-PortableEnvironment {
     $env:NPM_CONFIG_CACHE = $Paths.NpmCache
     $env:TEMP = $Paths.Temp
     $env:TMP = $Paths.Temp
+
+    # This bundle is subscription-OAuth-only. Clear inherited API-key fallbacks
+    # in this process and every child without changing the user's Windows
+    # environment or deleting credentials stored by other applications.
+    [Environment]::SetEnvironmentVariable('OPENAI_API_KEY', $null, 'Process')
+    [Environment]::SetEnvironmentVariable('CODEX_API_KEY', $null, 'Process')
 }
 
 function Get-OrCreateGatewayToken {
@@ -436,6 +471,8 @@ function Initialize-OpenClawConfig {
         return
     }
 
+    $portableWorkspace = '${OPENCLAW_PORTABLE_ROOT}/data/workspace'
+
     $config = [ordered]@{
         gateway = [ordered]@{
             mode = 'local'
@@ -448,14 +485,77 @@ function Initialize-OpenClawConfig {
         }
         agents = [ordered]@{
             defaults = [ordered]@{
-                workspace = $Paths.Workspace
+                workspace = $portableWorkspace
                 model = [ordered]@{
                     primary = 'openai/gpt-5.6-sol'
+                }
+                models = [ordered]@{
+                    'openai/*' = [ordered]@{
+                        agentRuntime = [ordered]@{
+                            id = 'codex'
+                        }
+                    }
+                }
+            }
+        }
+        plugins = [ordered]@{
+            enabled = $true
+            entries = [ordered]@{
+                codex = [ordered]@{
+                    enabled = $true
+                    config = [ordered]@{
+                        appServer = [ordered]@{
+                            mode = 'guardian'
+                            homeScope = 'agent'
+                            clearEnv = @('OPENAI_API_KEY', 'CODEX_API_KEY')
+                            defaultWorkspaceDir = $portableWorkspace
+                        }
+                    }
                 }
             }
         }
     }
     Write-Utf8NoBom -Path $Paths.Config -Value (($config | ConvertTo-Json -Depth 10) + [Environment]::NewLine)
+}
+
+function Assert-PortableCodexConfig {
+    param([Parameter(Mandatory = $true)]$Paths)
+
+    try {
+        $config = Get-Content -LiteralPath $Paths.Config -Raw | ConvertFrom-Json
+    }
+    catch {
+        throw 'The portable openclaw.json is not valid strict JSON. Restore it or remove data\config to regenerate the OAuth-only Codex configuration.'
+    }
+
+    $codexEntry = $config.plugins.entries.codex
+    $appServer = $codexEntry.config.appServer
+    $runtimeId = $config.agents.defaults.models.'openai/*'.agentRuntime.id
+    $primaryModel = [string]$config.agents.defaults.model.primary
+    $clearEnv = @($appServer.clearEnv)
+
+    if ($config.plugins.enabled -ne $true -or
+        $codexEntry.enabled -ne $true -or
+        $appServer.mode -ne 'guardian' -or
+        $appServer.homeScope -ne 'agent' -or
+        $clearEnv -notcontains 'OPENAI_API_KEY' -or
+        $clearEnv -notcontains 'CODEX_API_KEY' -or
+        $runtimeId -ne 'codex' -or
+        $primaryModel -notmatch '^openai/') {
+        throw 'The portable Codex runtime policy was changed. Restore data\config\openclaw.json or remove data\config to regenerate the required OAuth-only Codex configuration.'
+    }
+
+    if (($config.PSObject.Properties.Name -contains 'env') -and
+        (($config.env.PSObject.Properties.Name -contains 'OPENAI_API_KEY') -or
+         ($config.env.PSObject.Properties.Name -contains 'CODEX_API_KEY'))) {
+        throw 'OAuth-only mode rejects API keys embedded in openclaw.json.'
+    }
+    if (($config.PSObject.Properties.Name -contains 'models') -and
+        ($config.models.PSObject.Properties.Name -contains 'providers') -and
+        ($config.models.providers.PSObject.Properties.Name -contains 'openai') -and
+        ($config.models.providers.openai.PSObject.Properties.Name -contains 'apiKey')) {
+        throw 'OAuth-only mode rejects models.providers.openai.apiKey in openclaw.json.'
+    }
 }
 
 function Initialize-CompanionRegistry {
@@ -570,6 +670,7 @@ function Initialize-PortableState {
     $gatewayId = Get-OrCreateGatewayId -Paths $Paths -FileSystem $fileSystem
     Set-PortableEnvironment -Paths $Paths -Token $token -GatewayPort $GatewayPort
     Initialize-OpenClawConfig -Paths $Paths -GatewayPort $GatewayPort
+    Assert-PortableCodexConfig -Paths $Paths
     Initialize-CompanionRegistry -Paths $Paths -Token $token -GatewayId $gatewayId -GatewayPort $GatewayPort
     Initialize-CompanionSettings -Paths $Paths -GatewayId $gatewayId -GatewayPort $GatewayPort
     return [pscustomobject]@{ FileSystem = $fileSystem; Token = $token; GatewayId = $gatewayId }

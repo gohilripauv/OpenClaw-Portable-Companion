@@ -22,6 +22,13 @@ graceful shutdown, no wrapper-installed autorun/service, and guarded archive
 cleanup. Upstream OpenClaw and Companion internals were dependencies rather than
 in-repository source and were not part of this wrapper scan.
 
+For release 0.2.0, the Codex integration adds regression checks for exact
+`@openclaw/codex` and `@openai/codex` package integrity, managed native-binary
+version, OAuth-only child environments, model-scoped fail-closed runtime policy,
+guardian mode, bundled official-plugin provenance, and successful reserved
+`/codex` command registration. This is an incremental integration review, not a
+claim that the upstream OpenClaw or OpenAI codebases were audited here.
+
 The catalog is intentionally described as defense in depth: a party able to
 replace the wrapper, catalog, and payload together can replace the verifier too.
 Users should verify the release checksum after download and again after the

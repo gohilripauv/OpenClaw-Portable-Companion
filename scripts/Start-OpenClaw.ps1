@@ -196,14 +196,14 @@ try {
 
     if (-not $SkipOnboarding -and -not (Test-Path -LiteralPath $paths.ConfiguredMarker -PathType Leaf)) {
         Write-Host ''
-        Write-Host 'First run: ChatGPT/Codex sign-in has not been completed.' -ForegroundColor Yellow
+        Write-Host 'First run: ChatGPT/Codex OAuth has not been completed.' -ForegroundColor Yellow
         $answer = Read-Host 'Sign in now? [Y/n]'
         if ([string]::IsNullOrWhiteSpace($answer) -or $answer -match '^[Yy]') {
             & (Join-Path $PSScriptRoot 'Configure-OpenAI.ps1') `
                 -AllowInsecureFileSystem:$AllowInsecureFileSystem
         }
         else {
-            Write-Warning 'Continuing without OpenAI sign-in. Configure a provider before starting a chat.'
+            Write-Warning 'Continuing without sign-in. The Companion can open, but Codex chats will remain unavailable; there is no API-key fallback.'
         }
     }
 

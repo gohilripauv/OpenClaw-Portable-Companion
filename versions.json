@@ -1,9 +1,15 @@
 {
-  "wrapperVersion": "0.1.0",
+  "wrapperVersion": "0.2.0",
   "openClaw": {
     "version": "2026.8.1-beta.2",
     "npmIntegrity": "sha512-k4cwlyFOuXN5wN6NOH/gqxupGuvMkOr5OV2Eh7MJmmGFh86wvWSTrGBkL4XkNTg/kszWzGbotI8wKlZ468EjsQ==",
     "npmShasum": "7be9cd3fd9cebb1928817614c5b13ea99477f146"
+  },
+  "codexPlugin": {
+    "version": "2026.8.1-beta.2",
+    "npmIntegrity": "sha512-+xo8mg0xQnMOTvfcSfDLoa+HoWi9JkrJOcSqIPH0Oe6q7XRl9TE7IlJ89du66+W18RyQKlM4hD4Au274EbVigA==",
+    "managedCodexVersion": "0.147.0",
+    "managedCodexNpmIntegrity": "sha512-EQLEXecAG2ptxI7UpBMo2TR/ga5596/c/OsYF/0LoUDh5JANZ7IoGqlzBEWbuEVQ76JePIbtTW/ihCkp1a7Z3w=="
   },
   "node": {
     "version": "24.15.0",

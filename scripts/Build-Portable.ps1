@@ -219,6 +219,17 @@ try {
         $env:PATH = $previousBuildPath
     }
 
+    $codexPluginSource = Join-Path $gatewayDestination 'node_modules\@openclaw\codex'
+    $bundledExtensionsRoot = Join-Path $gatewayDestination 'node_modules\openclaw\dist\extensions'
+    $codexPluginRoot = Join-Path $bundledExtensionsRoot 'codex'
+    if (-not (Test-Path -LiteralPath (Join-Path $codexPluginSource 'openclaw.plugin.json') -PathType Leaf)) {
+        throw 'The pinned official Codex plugin package did not install its manifest.'
+    }
+    if (Test-Path -LiteralPath $codexPluginRoot) {
+        throw 'The pinned OpenClaw package already contains a codex bundled extension; review the upstream layout before rebuilding.'
+    }
+    Copy-Item -LiteralPath $codexPluginSource -Destination $codexPluginRoot -Recurse
+
     $openClawEntry = Join-Path $gatewayDestination 'node_modules\openclaw\openclaw.mjs'
     if (-not (Test-Path -LiteralPath $openClawEntry -PathType Leaf)) {
         throw 'The pinned OpenClaw package did not install its CLI entry point.'
@@ -228,12 +239,43 @@ try {
         throw "OpenClaw CLI smoke test failed: $reportedOpenClawVersion"
     }
 
+    $codexPluginManifest = Join-Path $codexPluginRoot 'openclaw.plugin.json'
+    $codexPluginPackage = Join-Path $codexPluginRoot 'package.json'
+    $managedCodexPackage = Join-Path $gatewayDestination 'node_modules\@openai\codex\package.json'
+    $managedCodexEntry = Join-Path $gatewayDestination 'node_modules\@openai\codex\bin\codex.js'
+    foreach ($requiredCodexFile in @(
+        $codexPluginManifest,
+        $codexPluginPackage,
+        $managedCodexPackage,
+        $managedCodexEntry)) {
+        if (-not (Test-Path -LiteralPath $requiredCodexFile -PathType Leaf)) {
+            throw "The pinned Codex harness payload is incomplete. Missing: $requiredCodexFile"
+        }
+    }
+
+    $installedCodexPlugin = Get-Content -LiteralPath $codexPluginPackage -Raw | ConvertFrom-Json
+    $installedManagedCodex = Get-Content -LiteralPath $managedCodexPackage -Raw | ConvertFrom-Json
+    if ([string]$installedCodexPlugin.version -ne [string]$versions.codexPlugin.version) {
+        throw "Codex plugin version mismatch: $($installedCodexPlugin.version)"
+    }
+    if ([string]$installedManagedCodex.version -ne [string]$versions.codexPlugin.managedCodexVersion) {
+        throw "Managed Codex package version mismatch: $($installedManagedCodex.version)"
+    }
+
+    $reportedCodexVersion = (& $runtimeNode $managedCodexEntry --version).Trim()
+    if ($LASTEXITCODE -ne 0 -or
+        $reportedCodexVersion -notmatch [regex]::Escape([string]$versions.codexPlugin.managedCodexVersion)) {
+        throw "Managed Codex binary smoke test failed: $reportedCodexVersion"
+    }
+
     $sourceCommit = 'uncommitted'
+    $sourceDirty = $true
     try {
         $candidateCommit = (& git -C $sourceRoot rev-parse HEAD 2>$null).Trim()
         if ($LASTEXITCODE -eq 0 -and $candidateCommit -match '^[0-9a-f]{40}$') {
             $sourceCommit = $candidateCommit
         }
+        $sourceDirty = @(& git -C $sourceRoot status --porcelain --untracked-files=normal 2>$null).Count -gt 0
     }
     catch { }
 
@@ -243,7 +285,11 @@ try {
         companionVersion = [string]$versions.companion.version
         nodeVersion = [string]$versions.node.version
         openClawVersion = [string]$versions.openClaw.version
+        codexPluginVersion = [string]$versions.codexPlugin.version
+        managedCodexVersion = [string]$versions.codexPlugin.managedCodexVersion
+        codexPluginPackaging = 'official-package-vendored-as-bundled-extension'
         sourceCommit = $sourceCommit
+        sourceDirty = $sourceDirty
         builtAtUtc = (Get-Date).ToUniversalTime().ToString('o')
     }
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)

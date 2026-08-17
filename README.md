@@ -1,8 +1,9 @@
 # OpenClaw Portable Companion
 
 An unofficial, no-installer Windows bundle that combines the **official signed
-OpenClaw Companion**, a portable Node.js runtime, and a pinned OpenClaw Gateway.
-Extract one ZIP, keep it in one folder, and run `Start-OpenClaw.bat`.
+OpenClaw Companion**, a portable Node.js runtime, a pinned OpenClaw Gateway,
+and the official `@openclaw/codex` development harness. Extract one ZIP, keep
+it in one folder, and run `Start-OpenClaw.bat`.
 
 This repository is a packaging and lifecycle wrapper. It is deliberately **not
 a fork of the official Companion source**: upstream already publishes portable
@@ -18,6 +19,10 @@ maintenance and trust risk.
 - Exact version pins and SHA-256 checks for every downloaded executable archive.
 - A lockfile-pinned OpenClaw dependency graph; no `openclaw@latest` download on
   the user's machine.
+- The matched official Codex plugin and its exact managed OpenAI Codex
+  app-server; no Codex installation is required on the target machine.
+- ChatGPT/Codex subscription OAuth only. Inherited OpenAI API keys are removed
+  from this app's child processes and are never used as a billing fallback.
 - A CycloneDX software bill of materials (SBOM) in each release bundle.
 - Gateway token authentication on `127.0.0.1` only.
 - State, workspaces, logs, WebView2 data, and credentials redirected to `data\`
@@ -32,17 +37,24 @@ maintenance and trust risk.
 2. Verify it in PowerShell:
 
    ```powershell
-   Get-FileHash .\OpenClaw-Portable-Companion-0.1.0-win-x64.zip -Algorithm SHA256
+   Get-FileHash .\OpenClaw-Portable-Companion-0.2.0-win-x64.zip -Algorithm SHA256
    ```
 
 3. Extract the whole ZIP to a writable **NTFS or ReFS** folder. For removable
    media, NTFS with BitLocker To Go is strongly recommended.
 4. Double-click `Start-OpenClaw.bat`. On first run it offers to open the
-   official ChatGPT/Codex OAuth flow.
+   official ChatGPT/Codex OAuth flow. Complete sign-in with the ChatGPT account
+   whose plan includes Codex.
 5. If a corporate browser blocks the localhost callback, run
    `Configure-OpenAI-Device-Code.bat` and follow the device-code instructions.
 6. When finished, choose **Exit** from the Companion tray icon. The launcher
    stops the Gateway and returns.
+
+In a new chat, run `/status` and confirm `Runtime: OpenAI Codex`. Then use
+`/codex status` or `/codex models` to check the native app-server and the models
+available to your account. The default is `openai/gpt-5.6-sol`; any selected
+`openai/*` agent model is required to use the Codex runtime and cannot silently
+fall back to OpenClaw's generic harness.
 
 The portable data is the `data\` directory. To move the application, exit it
 fully and copy the entire extracted folder. To reset it, first back up anything
@@ -70,11 +82,18 @@ you need from `data\workspace`, then remove `data\` while the app is stopped.
 - The official Companion's in-app updater is suppressed because the data-dir
   override identifies this as an isolated instance. Upgrade by downloading a
   coordinated release of this bundle.
-- Release 0.1.0 pairs the latest signed Companion (`2026.7.1`) with the newer
+- Release 0.2.0 pairs the latest signed Companion (`2026.7.1`) with the newer
   official Gateway (`2026.8.1-beta.2`). The Gateway is a beta because the
   current stable package has known vulnerable transitive dependencies; see the
   release notes. If beta software is outside your organization's policy, wait
   for an updated stable OpenClaw release.
+- The x64 ZIP is hundreds of megabytes because it contains the real native
+  Codex runtime. It will exceed normal email attachment limits; use an
+  organization-approved file-transfer location or email yourself an approved
+  download link rather than trying to evade mail or endpoint controls.
+- This provides Codex's native model loop, threads, compaction, shell/file
+  tools, and `/codex` controls inside OpenClaw. It is not the same UI or every
+  product feature of the official ChatGPT/Codex desktop app.
 
 ## Security defaults
 
@@ -90,7 +109,9 @@ the trust anchor against complete folder replacement.
 The initial Companion settings disable Windows-node capabilities (screen,
 camera, location, browser proxy, and system execution). OpenClaw itself remains
 an agent capable of reading and changing files in its configured workspace.
-Only place work there that the tool is authorized to access.
+The Codex harness uses its official guardian preset (`workspace-write` with
+reviewed approvals) and keeps its native home under portable agent state. Only
+place work there that the tool is authorized to access.
 
 See [SECURITY.md](SECURITY.md) and [the threat model](docs/THREAT-MODEL.md).
 
@@ -104,11 +125,13 @@ architecture:
 .\scripts\Build-Portable.ps1 -Architecture x64
 ```
 
-The build downloads only URLs recorded in `versions.json`, verifies their
+The build downloads only executable archives from URLs recorded in
+`versions.json`, verifies their
 SHA-256 values before extraction, verifies the Companion's OpenClaw Foundation
-signature, installs from `gateway/package-lock.json`, fails on moderate-or-higher
-npm advisories, runs CLI smoke tests, and writes a release ZIP, checksum, and
-CycloneDX SBOM under `dist\`.
+signature, installs the exact Gateway, official Codex plugin, and managed Codex
+runtime from `gateway/package-lock.json`, fails on moderate-or-higher npm
+advisories, runs native CLI smoke tests, and writes a release ZIP, checksum,
+and CycloneDX SBOM under `dist\`.
 
 ARM64 artifacts are assembled on GitHub's native `windows-11-arm` runner so
 native optional dependencies and install scripts see the correct architecture.
@@ -124,9 +147,10 @@ Do not replace version strings alone. For each update:
 2. Update both architecture URLs and verified archive digests in
    `versions.json`.
 3. Update `gateway/package.json`, regenerate `gateway/package-lock.json` using
-   npm from the pinned Node archive, and confirm the OpenClaw package integrity
-   matches the npm registry metadata. Validate the graph with `npm sbom`; do not
-   regenerate the lock with an arbitrary older host npm.
+   npm from the pinned Node archive, and confirm the OpenClaw, `@openclaw/codex`,
+   and `@openai/codex` integrity values match the npm registry metadata.
+   Validate the graph with `npm sbom`; do not regenerate the lock with an
+   arbitrary older host npm.
 4. Run tests and a full x64 build locally; let the release workflow build ARM64
    on native hardware.
 5. Test first-run OAuth, authenticated Companion connection, chat, movement of

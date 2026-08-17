@@ -94,6 +94,38 @@ function Wait-GatewayReady {
     throw 'Gateway did not report readiness within 75 seconds.'
 }
 
+function Wait-GatewayRpc {
+    param(
+        [Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process,
+        [Parameter(Mandatory = $true)]$Paths
+    )
+
+    $deadline = (Get-Date).AddSeconds(90)
+    $lastOutput = @('No RPC probe completed.')
+    while ((Get-Date) -lt $deadline) {
+        $Process.Refresh()
+        if ($Process.HasExited) {
+            throw 'Gateway exited while waiting for its authenticated RPC endpoint.'
+        }
+
+        $savedPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $lastOutput = @(& $Paths.Node $Paths.OpenClawEntry gateway status --require-rpc --json 2>&1)
+            $rpcExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $savedPreference
+        }
+        if ($rpcExitCode -eq 0) {
+            return $lastOutput
+        }
+        Start-Sleep -Seconds 2
+    }
+
+    throw "Authenticated Gateway RPC did not become ready within 90 seconds: $($lastOutput -join [Environment]::NewLine)"
+}
+
 function Stop-GatewayGracefully {
     param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process)
 
@@ -130,8 +162,12 @@ $environmentNames = @(
     'OPENCLAW_HOME',
     'OPENCLAW_STATE_DIR',
     'OPENCLAW_CONFIG_PATH',
+    'OPENCLAW_PORTABLE_ROOT',
+    'CODEX_HOME',
     'OPENCLAW_GATEWAY_TOKEN',
     'OPENCLAW_GATEWAY_PORT',
+    'OPENAI_API_KEY',
+    'CODEX_API_KEY',
     'TEMP',
     'TMP')
 $savedEnvironment = @{}
@@ -151,7 +187,31 @@ try {
             }
         }
         agents = [ordered]@{
-            defaults = [ordered]@{ workspace = $workspacePath }
+            defaults = [ordered]@{
+                workspace = $workspacePath
+                model = [ordered]@{ primary = 'openai/gpt-5.6-sol' }
+                models = [ordered]@{
+                    'openai/*' = [ordered]@{
+                        agentRuntime = [ordered]@{ id = 'codex' }
+                    }
+                }
+            }
+        }
+        plugins = [ordered]@{
+            enabled = $true
+            entries = [ordered]@{
+                codex = [ordered]@{
+                    enabled = $true
+                    config = [ordered]@{
+                        appServer = [ordered]@{
+                            mode = 'guardian'
+                            homeScope = 'agent'
+                            clearEnv = @('OPENAI_API_KEY', 'CODEX_API_KEY')
+                            defaultWorkspaceDir = $workspacePath
+                        }
+                    }
+                }
+            }
         }
     }
     Write-Utf8NoBom -Path $configPath -Value (($config | ConvertTo-Json -Depth 8) + [Environment]::NewLine)
@@ -159,10 +219,18 @@ try {
     $env:OPENCLAW_HOME = $statePath
     $env:OPENCLAW_STATE_DIR = $statePath
     $env:OPENCLAW_CONFIG_PATH = $configPath
+    $env:OPENCLAW_PORTABLE_ROOT = $bundleRoot
+    $env:CODEX_HOME = Join-Path $statePath 'codex-home'
+    [void](New-Item -ItemType Directory -Path $env:CODEX_HOME)
     $env:OPENCLAW_GATEWAY_TOKEN = $token
     $env:OPENCLAW_GATEWAY_PORT = [string]$port
     $env:TEMP = $tempPath
     $env:TMP = $tempPath
+    [Environment]::SetEnvironmentVariable('OPENAI_API_KEY', $null, 'Process')
+    [Environment]::SetEnvironmentVariable('CODEX_API_KEY', $null, 'Process')
+
+    $managedCodexVersion = Assert-ManagedCodexRuntime -Paths $paths
+    Write-Host "Verified bundled $managedCodexVersion." -ForegroundColor DarkGray
 
     $arguments = Join-WindowsCommandLine -ArgumentList @(
         $paths.OpenClawEntry,
@@ -184,10 +252,17 @@ try {
         -PassThru
     Wait-GatewayReady -Process $first -Port $port -StandardOutput $firstOut -StandardError $firstErr
 
-    $authenticatedOutput = & $paths.Node $paths.OpenClawEntry gateway status --require-rpc --json 2>&1
+    $pluginOutput = & $paths.Node $paths.OpenClawEntry plugins list --enabled --json
     if ($LASTEXITCODE -ne 0) {
-        throw "Authenticated Gateway status failed: $($authenticatedOutput -join [Environment]::NewLine)"
+        throw "Codex plugin inventory failed: $($pluginOutput -join [Environment]::NewLine)"
     }
+    $pluginInventory = ($pluginOutput -join [Environment]::NewLine) | ConvertFrom-Json
+    $codexPlugins = @($pluginInventory.plugins | Where-Object { $_.id -eq 'codex' -and $_.enabled -eq $true })
+    if ($codexPlugins.Count -ne 1) {
+        throw 'The bundled Codex plugin was not loaded and enabled exactly once.'
+    }
+
+    $authenticatedOutput = Wait-GatewayRpc -Process $first -Paths $paths
 
     $env:OPENCLAW_GATEWAY_TOKEN = 'wrong-' + [guid]::NewGuid().ToString('N')
     $savedPreference = $ErrorActionPreference
@@ -213,6 +288,17 @@ try {
         -not $firstLog.Contains('[shutdown] completed cleanly')) {
         throw 'Gateway logs did not confirm a clean SIGINT shutdown.'
     }
+    if (-not $firstLog.Contains('Registered plugin command: /codex')) {
+        throw 'Gateway logs did not confirm registration of the reserved /codex command.'
+    }
+    if ($firstLog.Contains('used external cli oauth bootstrap')) {
+        throw 'Gateway startup imported OAuth from a non-portable Codex home.'
+    }
+    $firstErrorLog = Get-Content -LiteralPath $firstErr -Raw
+    if ($firstErrorLog.Contains('only bundled plugins can claim reserved command ownership') -or
+        $firstErrorLog.Contains("can't verify where this plugin came from")) {
+        throw 'The Codex plugin loaded without the bundled official-plugin trust boundary.'
+    }
 
     $secondOut = Join-Path $smokeRoot 'second.stdout.log'
     $secondErr = Join-Path $smokeRoot 'second.stderr.log'
@@ -225,6 +311,7 @@ try {
         -RedirectStandardError $secondErr `
         -PassThru
     Wait-GatewayReady -Process $second -Port $port -StandardOutput $secondOut -StandardError $secondErr
+    [void](Wait-GatewayRpc -Process $second -Paths $paths)
     Stop-GatewayGracefully -Process $second
 
     Write-Host 'Gateway auth, graceful shutdown, and immediate restart checks passed.' -ForegroundColor Green
@@ -257,6 +344,20 @@ finally {
     $parentPrefix = $smokeParent.TrimEnd('\') + '\'
     if ($candidate.StartsWith($parentPrefix, [System.StringComparison]::OrdinalIgnoreCase) -and
         [System.IO.Directory]::Exists($candidate)) {
-        [System.IO.Directory]::Delete($candidate, $true)
+        $lastDeleteError = $null
+        for ($attempt = 1; $attempt -le 20; $attempt++) {
+            try {
+                [System.IO.Directory]::Delete($candidate, $true)
+                $lastDeleteError = $null
+                break
+            }
+            catch {
+                $lastDeleteError = $_
+                Start-Sleep -Seconds 1
+            }
+        }
+        if ($null -ne $lastDeleteError) {
+            throw $lastDeleteError
+        }
     }
 }

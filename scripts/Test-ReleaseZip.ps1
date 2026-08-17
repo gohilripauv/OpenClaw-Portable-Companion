@@ -102,6 +102,20 @@ finally {
     $parentPrefix = $testParent.TrimEnd('\') + '\'
     if ($candidate.StartsWith($parentPrefix, [System.StringComparison]::OrdinalIgnoreCase) -and
         [System.IO.Directory]::Exists($candidate)) {
-        [System.IO.Directory]::Delete($candidate, $true)
+        $lastDeleteError = $null
+        for ($attempt = 1; $attempt -le 20; $attempt++) {
+            try {
+                [System.IO.Directory]::Delete($candidate, $true)
+                $lastDeleteError = $null
+                break
+            }
+            catch {
+                $lastDeleteError = $_
+                Start-Sleep -Seconds 1
+            }
+        }
+        if ($null -ne $lastDeleteError) {
+            throw $lastDeleteError
+        }
     }
 }

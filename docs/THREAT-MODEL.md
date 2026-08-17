@@ -2,7 +2,8 @@
 
 ## Assets
 
-- ChatGPT/Codex OAuth credentials and provider API keys.
+- ChatGPT/Codex OAuth credentials. This wrapper does not accept OpenAI API-key
+  authentication, though unrelated keys may exist in the parent environment.
 - The local Gateway shared token and paired-device identities.
 - Source code and documents placed in the portable workspace.
 - Prompts, responses, logs, sessions, and generated artifacts.
@@ -35,6 +36,16 @@ dependency risk-free.
 - Ambient access to credentials: the `data\` ACL is reduced to the current user,
   SYSTEM, and local Administrators on NTFS/ReFS, including recursive repair of
   explicit ACLs retained by a previous ACL-aware copy.
+- Accidental OpenAI API billing: the wrapper clears inherited `OPENAI_API_KEY`
+  and `CODEX_API_KEY` values in its process tree, pins a named OAuth profile in
+  auth order, and requires the native Codex runtime for every `openai/*` agent
+  model.
+- Generic-runtime fallback: provider/model policy explicitly selects `codex`,
+  so an unavailable or incompatible harness fails instead of silently using the
+  built-in OpenClaw agent loop.
+- Untrusted plugin origin: the exact official Codex package is copied into the
+  immutable, cataloged bundled-extension tree. Lifecycle tests require its
+  reserved `/codex` command to register without provenance warnings.
 
 ## Residual risks
 
@@ -45,7 +56,9 @@ dependency risk-free.
   or alter portable state.
 - FAT/exFAT and many network filesystems do not preserve the required ACLs.
 - A malicious or compromised model/tool/plugin can misuse capabilities the user
-  grants. Portable packaging does not sandbox OpenClaw.
+  grants. Codex guardian mode limits native work to `workspace-write` by
+  default, but the portable wrapper does not sandbox the entire Companion or
+  Gateway process.
 - OAuth, DNS, proxy, endpoint-security, Windows telemetry, crash dumps, and
   browser behavior can leave host traces outside the portable directory.
 - Hard power loss or forced termination can leave application-level recovery

@@ -23,6 +23,23 @@ Licensed under the MIT License. The complete license text is reproduced in
 `licenses/OpenClaw-MIT.txt` in every release bundle. OpenClaw's own package may
 contain further notices in its `THIRD_PARTY_NOTICES.md`.
 
+## OpenClaw Codex plugin
+
+Source: <https://github.com/openclaw/openclaw/tree/main/extensions/codex>
+
+The official `@openclaw/codex` package is built from the MIT-licensed OpenClaw
+repository and is redistributed without source changes. This wrapper copies
+the package into OpenClaw's bundled-extension tree so its official reserved
+command surface is available without a target-machine install.
+
+## OpenAI Codex
+
+Source: <https://github.com/openai/codex>
+
+The managed `@openai/codex` package and its architecture-specific native
+runtime are licensed under the Apache License 2.0. The complete license text is
+reproduced in `licenses/OpenAI-Codex-Apache-2.0.txt` in every release bundle.
+
 ## Node.js
 
 Source: <https://github.com/nodejs/node>
