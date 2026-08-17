@@ -136,8 +136,12 @@ function Stop-GatewayGracefully {
     if (-not [OpenClawPortable.Tests.ConsoleSignal]::SendCtrlC($Process.Id)) {
         throw 'Could not deliver CTRL_C_EVENT to the Gateway console.'
     }
-    if (-not $Process.WaitForExit(20000)) {
-        throw 'Gateway did not exit within 20 seconds of SIGINT.'
+    # Hosted Windows runners can take substantially longer than interactive
+    # desktops to schedule the managed app-server cleanup after SIGINT. Keep
+    # requiring a real graceful exit and the clean-shutdown log assertions
+    # below, but allow enough time for native x64 and ARM64 CI hosts.
+    if (-not $Process.WaitForExit(60000)) {
+        throw 'Gateway did not exit within 60 seconds of SIGINT.'
     }
 }
 
