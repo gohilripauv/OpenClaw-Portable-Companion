@@ -10,6 +10,25 @@ a fork of the official Companion source**: upstream already publishes portable
 x64 and ARM64 ZIPs, so keeping that signed application unchanged reduces both
 maintenance and trust risk.
 
+## Why this bundle exists
+
+The official OpenClaw portable ZIP already provides the signed Windows
+Companion, but its published requirements include a running local Gateway. This
+community bundle supplies that Gateway, portable Node.js, the official Codex
+plugin and managed Codex runtime, OAuth-only configuration, portable state, and
+coordinated process cleanup in the same extracted folder.
+
+Compared with this repository's 0.1.0 `main` baseline, release 0.2.0 no longer
+merely selects an OpenAI model: it forces eligible `openai/*` routes through the
+native Codex harness and fails closed if Codex is unavailable. The tradeoffs are
+a roughly 435 MB x64 download, a beta Gateway, community-owned unsigned launcher
+scripts, and replacement-ZIP upgrades.
+
+Read the [0.2.0 release notes](docs/RELEASE_NOTES.md) and the
+[portable-options comparison](docs/COMPARISON.md) for a detailed, sourced view
+of when to use this bundle, the official Companion, or the TechJarves USB
+launcher.
+
 ## What you get
 
 - No MSI/MSIX installation and no administrator prompt from this wrapper.
