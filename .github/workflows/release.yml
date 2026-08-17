@@ -67,10 +67,12 @@ jobs:
             runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - name: Check out release tag
+      - name: Check out release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.prepare.outputs.tag }}
+          # Draft releases do not expose their tag ref until publication.
+          # Build the immutable workflow-dispatch commit that the draft targets.
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Run portable checks
