@@ -48,7 +48,8 @@ jobs:
           set -euo pipefail
           gh release create "$RELEASE_TAG" \
             --draft \
-            --title "OpenClaw Portable Companion $RELEASE_TAG" \
+            --prerelease \
+            --title "OpenClaw Portable Companion $RELEASE_TAG (Preview)" \
             --notes-file docs/RELEASE_NOTES.md \
             --target "$GITHUB_SHA"
 
@@ -132,4 +133,4 @@ jobs:
             dist/SHA256SUMS-*.txt \
             dist/SBOM-*.cdx.json \
             --clobber
-          gh release edit "$RELEASE_TAG" --draft=false
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease
